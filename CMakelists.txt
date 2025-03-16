@@ -1,0 +1,9 @@
+cmake_minimum_required(VERSION 3.10)
+project(redis_clone_cpp)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CROW_MAIN ON)  # so Crow can be compiled as a single-header
+
+add_executable(redis_clone_cpp main.cpp)
+target_include_directories(redis_clone_cpp PRIVATE /path/to/crow/include)
+# using pkg-config or some other method,link  needed libraries (ssl, pthread, etc.)
