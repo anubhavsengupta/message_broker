@@ -1,37 +1,49 @@
-#include <arpa/inet.h>   // for htons and htonl
-#include <netinet/in.h>  // for sockaddr_in
-#include <sys/socket.h>  // for socket, bind, listen
-#include <stdlib.h>      // for exit
+#include <arpa/inet.h>   // using inet_pton, htons
+#include <netinet/in.h>  // using sockaddr_in
+#include <sys/socket.h>  // using socket, connect, send
+#include <stdlib.h>      // using exit
+#include <stdio.h>
+#include <string.h>      // using memset, strlen
+#include <unistd.h>      // using close
 
-// 'die' function is defined to handle errors.
+
 void die(const char* msg) {
     perror(msg);
     exit(EXIT_FAILURE);
 }
 
 int main() {
-    // Create a socket (file descriptor)
-    int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd < 0) {
+    // create socket
+    int client_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_fd < 0) {
         die("socket()");
     }
 
-    // set up  server address structure
-    struct sockaddr_in serverAddress = {};
-    serverAddress.sin_family = AF_INET;         
-    serverAddress.sin_port = htons(1234);            
-    serverAddress.sin_addr.s_addr = htonl(0);           //  wildcardaddress (0.0.0.0)
+    // setup server
+    struct sockaddr_in serverAddress;
+    memset(&serverAddress, 0, sizeof(serverAddress));
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_port = htons(1234);  
 
-    // bind socket to the specified address and port
-    int bindResult = bind(socket_fd, (const struct sockaddr *)&serverAddress, sizeof(serverAddress));
-    if (bindResult != 0) {
-        die("bind()");
+    // set server IP address to just be localhost
+    if (inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr) <= 0) {
+        die("inet_pton()");
     }
 
-    // Start listening for incoming connections 
-    if (listen(socket_fd, 10) < 0) {
-        die("listen()");
+    // connect to server
+    if (connect(client_fd, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0) {
+        die("connect()");
     }
-    
+
+    // send a message to the server.
+    const char* msg = "Hello, server!";
+    ssize_t bytes_sent = send(client_fd, msg, strlen(msg), 0);
+    if (bytes_sent < 0) {
+        die("send()");
+    }
+    printf("Message sent: %s\n", msg);
+
+    // close connection 
+    close(client_fd);
     return 0;
 }
