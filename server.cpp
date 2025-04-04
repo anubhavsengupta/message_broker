@@ -4,17 +4,23 @@
 #include <unistd.h>      // for close, read
 #include <stdlib.h>      // for exit
 #include <stdio.h>
-#include <string.h>      // for memset, strlen
+#include <string.h>      // for memset, strlen, strtok
 #include <fcntl.h>       // for fcntl, O_NONBLOCK
 #include <poll.h>        // for poll
 #include <vector>
+#include <unordered_map>
+#include <string>
+#include <sstream>
+
+// simple key value store
+std::unordered_map<std::string, std::string> kv_store;
 
 void die(const char* msg) {
     perror(msg);
     exit(EXIT_FAILURE);
 }
 
-// helper to set a fd to non-blocking mode
+// helper: set a fd to non-blocking mode
 static void set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0)
@@ -24,6 +30,35 @@ static void set_nonblocking(int fd) {
         die("fcntl(set)");
 }
 
+// simple command parser: supports "SET key value" and "GET key"
+std::string process_command(const std::string& cmd) {
+    std::istringstream iss(cmd);
+    std::string token;
+    iss >> token;
+
+    if (token == "SET") {
+        std::string key, value;
+        iss >> key;
+        // get rest of line as value
+        std::getline(iss, value);
+        // trim leading spaces in value
+        size_t start = value.find_first_not_of(" ");
+        if (start != std::string::npos)
+            value = value.substr(start);
+        kv_store[key] = value;
+        return "OK\n";
+    } else if (token == "GET") {
+        std::string key;
+        iss >> key;
+        if (kv_store.count(key)) {
+            return kv_store[key] + "\n";
+        } else {
+            return "(nil)\n";
+        }
+    }
+    return "ERR unknown command\n";
+}
+
 int main() {
     // create the listening socket
     int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -31,7 +66,7 @@ int main() {
         die("socket()");
     }
 
-    // reuse port so we don't have to wait for the socket to free up
+    // reuse port so we dont have to wait for the socket to free up
     int opt = 1;
     if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         die("setsockopt()");
@@ -60,46 +95,40 @@ int main() {
 
     // create a vector of pollfd structures
     std::vector<struct pollfd> pollfds;
-    // add the listening socket at index 0
+    // add the listening socket at index 0 (we want to know when new connections come in)
     struct pollfd pfd;
     pfd.fd = socket_fd;
-    pfd.events = POLLIN; // we want to know when new connections come in
+    pfd.events = POLLIN;
     pfd.revents = 0;
     pollfds.push_back(pfd);
 
     // event loop
     while (true) {
-        // wait for readiness on our fds (blocking call, but only here)
+        // wait for readiness on our fds (blocking call here)
         int rv = poll(pollfds.data(), pollfds.size(), -1);
         if (rv < 0) {
             if (errno == EINTR)
                 continue; // interrupted by a signal, retry
-            die("poll");
+            die("poll()");
         }
 
-        // loop through the pollfd list
-        // note: index 0 is the listening socket
+        // iterate over pollfds
         for (size_t i = 0; i < pollfds.size(); i++) {
-            // if it's the listening socket, check for incoming connections
+            // if index 0 (listening socket) is ready, accept new connections
             if (i == 0 && (pollfds[i].revents & POLLIN)) {
-                // accept as many new connections as we can
                 while (true) {
                     struct sockaddr_in clientAddress;
                     socklen_t clientAddrSize = sizeof(clientAddress);
                     int connfd = accept(socket_fd, (struct sockaddr *)&clientAddress, &clientAddrSize);
                     if (connfd < 0) {
-                        // if no more connections are waiting, break out
                         if (errno == EAGAIN || errno == EWOULDBLOCK)
-                            break;
+                            break; // no more incoming connections
                         perror("accept");
                         break;
                     }
                     printf("accepted a connection.\n");
-
-                    // set the new connection to non-blocking
+                    // set new connection to non-blocking and add it to pollfds, watch for read events
                     set_nonblocking(connfd);
-
-                    // add this connection to our pollfd vector, watch for read events
                     struct pollfd client_pfd;
                     client_pfd.fd = connfd;
                     client_pfd.events = POLLIN;
@@ -107,14 +136,14 @@ int main() {
                     pollfds.push_back(client_pfd);
                 }
             }
-            // handle client connections
+            // for client connections
             else if (i > 0) {
-                // if there is any error or hangup, close the connection
+                // if error/hangup, close and remove the connection
                 if (pollfds[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
                     printf("closing connection (error/hangup).\n");
                     close(pollfds[i].fd);
                     pollfds.erase(pollfds.begin() + i);
-                    i--; // adjust index after removal
+                    i--;
                     continue;
                 }
                 // if the socket is ready for reading
@@ -122,7 +151,6 @@ int main() {
                     char buffer[1024] = {0};
                     ssize_t bytesRead = read(pollfds[i].fd, buffer, sizeof(buffer) - 1);
                     if (bytesRead < 0) {
-                        // if nothing to read, continue
                         if (errno == EAGAIN || errno == EWOULDBLOCK)
                             continue;
                         perror("read");
@@ -140,9 +168,9 @@ int main() {
                     } else {
                         buffer[bytesRead] = '\0';
                         printf("received: %s\n", buffer);
-                        // send a response
-                        const char* response = "hello from server!\n";
-                        ssize_t bytesSent = send(pollfds[i].fd, response, strlen(response), 0);
+                        // process command (note: for simplicity, we assume one command per read)
+                        std::string response = process_command(std::string(buffer));
+                        ssize_t bytesSent = send(pollfds[i].fd, response.c_str(), response.length(), 0);
                         if (bytesSent < 0) {
                             perror("send");
                             close(pollfds[i].fd);

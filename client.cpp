@@ -8,13 +8,14 @@
 #include <fcntl.h>       // using fcntl, O_NONBLOCK
 #include <poll.h>        // using poll
 #include <vector>
+#include <iostream>
 
 void die(const char* msg) {
     perror(msg);
     exit(EXIT_FAILURE);
 }
 
-// helper to set a fd to non-blocking mode
+// helper: set fd to non-blocking mode
 static void set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0)
@@ -36,7 +37,7 @@ int main() {
     memset(&serverAddress, 0, sizeof(serverAddress));
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(1234);
-    
+
     // set server ip address to localhost
     if (inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr) <= 0) {
         die("inet_pton()");
@@ -46,61 +47,72 @@ int main() {
     if (connect(client_fd, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0) {
         die("connect()");
     }
-    
-    // set the client socket to non-blocking mode
+    printf("connected to server\n");
+
+    // set client socket to non-blocking mode
     set_nonblocking(client_fd);
 
-    // send a message to the server
-    const char* msg = "Hello, server!";
-    ssize_t bytes_sent = send(client_fd, msg, strlen(msg), 0);
-    if (bytes_sent < 0) {
-        die("send()");
-    }
-    printf("message sent: %s\n", msg);
+    // for demo purposes, allow user to type commands to send to server
+    printf("enter commands (e.g., SET key value, GET key):\n");
 
-    // create a vector of pollfd, we'll only have our client fd here
+    // we'll use poll to wait for both user input (stdin) and server responses
     std::vector<struct pollfd> pollfds;
+    // monitor client socket for server responses
     struct pollfd pfd;
     pfd.fd = client_fd;
-    pfd.events = POLLIN;  // we want to know when data is available to read
+    pfd.events = POLLIN;
     pfd.revents = 0;
     pollfds.push_back(pfd);
+    // monitor stdin for user input (fd 0)
+    struct pollfd stdin_pfd;
+    stdin_pfd.fd = 0;
+    stdin_pfd.events = POLLIN;
+    stdin_pfd.revents = 0;
+    pollfds.push_back(stdin_pfd);
 
-    // event loop to wait for a response from the server
+    char sendbuf[1024];
+    char recvbuf[1024];
+
     while (true) {
-        // wait for readiness (5 second timeout here, adjust as needed)
+        // wait for readiness (timeout 5 sec)
         int rv = poll(pollfds.data(), pollfds.size(), 5000);
         if (rv < 0) {
             if (errno == EINTR)
-                continue;  // interrupted by a signal, retry
+                continue;
             die("poll()");
         }
         if (rv == 0) {
-            // timeout occurred, no response received
-            printf("no response from server, timing out\n");
-            break;
+            // no event, continue polling
+            continue;
         }
-        // check if our client fd is ready to read
+
+        // check for user input on stdin
+        if (pollfds[1].revents & POLLIN) {
+            if (fgets(sendbuf, sizeof(sendbuf), stdin) != NULL) {
+                // send command to server
+                ssize_t bytesSent = send(client_fd, sendbuf, strlen(sendbuf), 0);
+                if (bytesSent < 0)
+                    perror("send");
+            }
+        }
+
+        // check if server sent a response
         if (pollfds[0].revents & POLLIN) {
-            char buffer[1024] = {0};
-            ssize_t bytesRead = read(client_fd, buffer, sizeof(buffer) - 1);
+            ssize_t bytesRead = read(client_fd, recvbuf, sizeof(recvbuf)-1);
             if (bytesRead < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
-                    continue;  // nothing available, try again
-                die("read()");
-            }
-            if (bytesRead == 0) {
+                    continue;
+                die("read");
+            } else if (bytesRead == 0) {
                 printf("server closed connection\n");
                 break;
+            } else {
+                recvbuf[bytesRead] = '\0';
+                printf("received from server: %s", recvbuf);
             }
-            buffer[bytesRead] = '\0';
-            printf("received from server: %s\n", buffer);
-            // assume we exit after receiving the response
-            break;
         }
     }
 
-    // close connection
     close(client_fd);
     return 0;
 }
