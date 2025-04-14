@@ -181,8 +181,8 @@ int main() {
                     }
                 }
             }
-        } // end for loop over pollfds
-    } // end event loop
+        } 
+    } 
 
     close(socket_fd);
     return 0;
