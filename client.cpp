@@ -31,41 +31,35 @@ int main() {
     if (client_fd < 0) {
         die("socket()");
     }
-
     // setup server address
     struct sockaddr_in serverAddress;
     memset(&serverAddress, 0, sizeof(serverAddress));
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(1234);
-
     // set server ip address to localhost
     if (inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr) <= 0) {
         die("inet_pton()");
     }
-
     // connect to server
     if (connect(client_fd, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0) {
         die("connect()");
     }
     printf("connected to server\n");
-
     // set client socket to non-blocking mode
     set_nonblocking(client_fd);
 
-    // for demo purposes, allow user to type commands to send to server
+    // for demo, let user type commands (SET/GET) to send to server
     printf("enter commands (e.g., SET key value, GET key):\n");
 
-    // we'll use poll to wait for both user input (stdin) and server responses
+    // use poll to monitor both client socket (for responses) and stdin (user input)
     std::vector<struct pollfd> pollfds;
-    // monitor client socket for server responses
-    struct pollfd pfd;
-    pfd.fd = client_fd;
-    pfd.events = POLLIN;
-    pfd.revents = 0;
-    pollfds.push_back(pfd);
-    // monitor stdin for user input (fd 0)
+    struct pollfd client_pfd;
+    client_pfd.fd = client_fd;
+    client_pfd.events = POLLIN;
+    client_pfd.revents = 0;
+    pollfds.push_back(client_pfd);
     struct pollfd stdin_pfd;
-    stdin_pfd.fd = 0;
+    stdin_pfd.fd = 0; // stdin
     stdin_pfd.events = POLLIN;
     stdin_pfd.revents = 0;
     pollfds.push_back(stdin_pfd);
@@ -82,20 +76,17 @@ int main() {
             die("poll()");
         }
         if (rv == 0) {
-            // no event, continue polling
+            // no event; just continue polling
             continue;
         }
-
         // check for user input on stdin
         if (pollfds[1].revents & POLLIN) {
             if (fgets(sendbuf, sizeof(sendbuf), stdin) != NULL) {
-                // send command to server
                 ssize_t bytesSent = send(client_fd, sendbuf, strlen(sendbuf), 0);
                 if (bytesSent < 0)
                     perror("send");
             }
         }
-
         // check if server sent a response
         if (pollfds[0].revents & POLLIN) {
             ssize_t bytesRead = read(client_fd, recvbuf, sizeof(recvbuf)-1);
